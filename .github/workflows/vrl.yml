@@ -1,0 +1,28 @@
+name: vrl
+
+on:
+  push:
+    branches: [main]
+    paths: ["vrl/**", ".github/workflows/vrl.yml"]
+  pull_request:
+    paths: ["vrl/**", ".github/workflows/vrl.yml"]
+
+defaults:
+  run:
+    working-directory: vrl
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+      - name: Lint
+        run: uv run --python ${{ matrix.python-version }} --extra dev ruff check .
+      - name: Test
+        run: uv run --python ${{ matrix.python-version }} --extra dev --extra auth pytest -q
