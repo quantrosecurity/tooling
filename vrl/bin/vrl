@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# vrl — run the CLI straight from this repo, no global install.
+#
+# This wrapper uses `uv` to create and reuse an isolated environment from the
+# tool's pyproject.toml (the first run sets it up in <tool>/.venv; later runs are
+# instant). Nothing is installed onto your PATH — you invoke this file directly:
+#
+#   ./vrl/bin/vrl show CVE-2024-27198
+#   export PATH="$PWD/vrl/bin:$PATH" && vrl stats
+#
+set -euo pipefail
+
+TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$TOOL_DIR" --quiet python -m vrl "$@"
+fi
+
+# Fallback without uv: a plain venv created once beside the tool.
+VENV="$TOOL_DIR/.venv"
+if [ ! -x "$VENV/bin/python" ]; then
+  echo "vrl: setting up a local environment (one-time)…" >&2
+  python3 -m venv "$VENV"
+  "$VENV/bin/python" -m pip install --quiet --upgrade pip
+  "$VENV/bin/python" -m pip install --quiet -e "$TOOL_DIR"
+fi
+exec "$VENV/bin/python" -m vrl "$@"
