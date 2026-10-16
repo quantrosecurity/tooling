@@ -68,3 +68,33 @@ def test_cve_record():
     assert rec.difficulty_level == 3
     assert rec.exploit_in_wild is True
     assert rec.epss == 0.944
+
+
+# ── replay traces (PR D) ─────────────────────────────────────────────────────
+
+
+from vrl.models import ReplayTrace  # noqa: E402
+
+from conftest import journal_attempts, replay_trace  # noqa: E402
+
+
+def test_replay_trace_parses_public_projection():
+    t = ReplayTrace.from_dict(replay_trace())
+    assert t.cve == "CVE-2024-4577"
+    assert t.package == "php" and t.vuln_version == "8.1.0"
+    assert t.fixed_versions == ["8.1.1"]
+    assert t.final_status == "exploit_generated"
+    assert len(t.attempts) == 2
+    assert t.attempts[0].rejected is True
+    assert "no marker" in t.attempts[0].trigger_error
+    assert t.attempts[1].accepted
+    assert t.attempts[1].reasoning == []  # never present on the public plane
+
+
+def test_replay_trace_parses_raw_journal_keys():
+    t = ReplayTrace.from_dict(replay_trace(attempts=journal_attempts()))
+    a1, a2 = t.attempts
+    assert a1.rejected is True and "no marker" in a1.trigger_error
+    assert a1.reasoning == ["first attempt reasoning", "second reasoning entry"]
+    assert a1.tool_calls[0]["tool"] == "read_file"
+    assert a2.accepted and a2.reasoning == ["final attempt reasoning"]

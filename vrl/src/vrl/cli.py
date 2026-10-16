@@ -2,18 +2,26 @@
 
 Commands:
 
-* ``vrl submit <CVE>``  — queue a CVE (public email path, or ``--internal``)
+* ``vrl submit <CVE>``  — queue a CVE (public email path, ``--internal``, or
+  ``--browser`` to finish in the website's Turnstile-protected form)
 * ``vrl watch  <CVE>``  — live-poll a CVE until it finishes (alias: ``track``)
 * ``vrl show   <CVE>``  — the full write-up of one CVE (alias: ``status``)
+* ``vrl replay <CVE>``  — what happened when it was processed: every attempt,
+  what the judge rejected each one for, how it ended
 * ``vrl list``          — browse the live queue (alias: ``feed``)
 * ``vrl stats``         — queue depth + program economics
 * ``vrl auth whoami``   — show the identity a token resolves to
+
+Reads are tiered like the API's read plane: anonymous (default) gets the public
+projection; ``--internal`` attaches the operator credential for the full record
+(cost/verdict/AI-XI, replay reasoning and verdict).
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import webbrowser
 from typing import Optional
 
 import typer
@@ -61,6 +69,35 @@ def _validate_cves(raw: str) -> list[str]:
     return tokens
 
 
+def _internal_token(state: AppState) -> Optional[str]:
+    """Resolve the operator credential for a full-record read (``--internal``).
+
+    Never silently anonymous: ``--internal`` is an explicit request, so a failed
+    mint raises instead of quietly downgrading to the public view.
+    """
+    return auth.resolve_token(state.token, base_url=config.base_url(state.base_url))
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Best-effort cross-platform clipboard copy; False when nothing worked."""
+    import shutil
+    import subprocess
+
+    for cmd in (
+        ["pbcopy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+        ["clip.exe"],
+    ):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run(cmd, input=text.encode(), check=True, timeout=5)
+                return True
+            except Exception:  # noqa: BLE001 — clipboard is convenience, never a blocker
+                continue
+    return False
+
+
 # ── global options ──────────────────────────────────────────────────────────
 
 
@@ -77,9 +114,7 @@ def _main(
         False, "--json", help="Emit raw JSON instead of a rendered view."
     ),
     no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI color."),
-    version: bool = typer.Option(
-        False, "--version", help="Show version and exit.", is_eager=True
-    ),
+    version: bool = typer.Option(False, "--version", help="Show version and exit.", is_eager=True),
 ) -> None:
     if version:
         render.console.print(f"vrl {__version__}")
@@ -105,8 +140,16 @@ def submit(
         None, "--submitted-by", help="Optional attribution / org name."
     ),
     turnstile_token: Optional[str] = typer.Option(
-        None, "--turnstile-token", envvar=config.ENV_TURNSTILE_TOKEN,
+        None,
+        "--turnstile-token",
+        envvar=config.ENV_TURNSTILE_TOKEN,
         help="Cloudflare Turnstile token (public path, if the deployment enforces it).",
+    ),
+    browser: bool = typer.Option(
+        False,
+        "--browser",
+        help="Open the website's Turnstile-protected submit form in your browser "
+        "(the CVE id is copied to the clipboard) instead of POSTing from here.",
     ),
     internal: bool = typer.Option(
         False, "--internal", help="Use the privileged /internal path (bearer token, no Turnstile)."
@@ -125,6 +168,23 @@ def submit(
     """
     state: AppState = ctx.obj
     cves = _validate_cves(cve)
+
+    if browser:
+        url = config.submit_url()
+        copied = _copy_to_clipboard(", ".join(cves))
+        webbrowser.open(url)
+        render.console.print(
+            f"[bold]✓ Opened the submit form[/] {url}\n"
+            + (
+                "The CVE id"
+                + ("s are" if len(cves) > 1 else " is")
+                + " in your clipboard — paste, clear the Turnstile, submit.\n"
+                if copied
+                else "Paste " + ", ".join(cves) + ", clear the Turnstile, submit.\n"
+            )
+            + f"Then follow it from here: [bold]vrl watch {cves[0]} --verbose[/]"
+        )
+        raise typer.Exit()
 
     if internal:
         token = auth.resolve_token(state.token, base_url=config.base_url(state.base_url))
@@ -164,16 +224,20 @@ def submit(
 # ── watch ───────────────────────────────────────────────────────────────────
 
 
-def _watch_impl(state: AppState, cve: str, *, interval: float, timeout: Optional[float] = None,
-                verbose: bool = False) -> None:
+def _watch_impl(
+    state: AppState,
+    cve: str,
+    *,
+    interval: float,
+    timeout: Optional[float] = None,
+    verbose: bool = False,
+) -> None:
     from .watch import watch_cve
 
     with state.client() as c:
         item = watch_cve(c, cve, interval=interval, timeout=timeout, verbose=verbose)
     meta = config.status_meta(item.status)
-    render.console.print(
-        f"\n[bold {meta.color}]{item.cve_id} → {meta.label}[/]  {meta.blurb}"
-    )
+    render.console.print(f"\n[bold {meta.color}]{item.cve_id} → {meta.label}[/]  {meta.blurb}")
 
 
 @app.command()
@@ -201,16 +265,25 @@ def watch(
 def show(
     ctx: typer.Context,
     cve: str = typer.Argument(..., help="The CVE id to describe."),
+    internal: bool = typer.Option(
+        False,
+        "--internal",
+        help="Attach the operator credential for the full record (cost/verdict/AI-XI).",
+    ),
 ) -> None:
-    """Show the full write-up of one CVE: status and how the run went (alias: status)."""
+    """Show the write-up of one CVE: status and how the run went (alias: status).
+
+    Without ``--internal`` this is the public view by construction — the API
+    projects the record for anonymous callers (see its public_view)."""
     state: AppState = ctx.obj
     cve = cve.upper()
-    with state.client() as c:
-        item = c.get_item(cve)
+    token = _internal_token(state) if internal else None
+    with state.client(token=token) as c:
+        item = c.get_item(cve, internal=internal)
         record = None
         if config.is_terminal(item.status):
             try:
-                record = c.find_record(cve)
+                record = c.find_record(cve, internal=internal)
             except VrlError:
                 record = None
     if state.json_out:
@@ -218,6 +291,8 @@ def show(
         _print_json(payload)
     else:
         render.console.print(render.issue_panel(item, record))
+        if not internal:
+            render.console.print(render.public_view_note())
 
 
 # ── list ──────────────────────────────────────────────────────────────────
@@ -233,17 +308,57 @@ def list_cmd(
     ),
     order: str = typer.Option("desc", "--order", help="asc | desc | priority."),
     limit: int = typer.Option(25, "--limit", "-l", min=1, max=100, help="How many rows."),
+    internal: bool = typer.Option(
+        False,
+        "--internal",
+        help="Attach the operator credential for full records (cost/paid-feed fields).",
+    ),
 ) -> None:
     """Browse the live queue (alias: feed)."""
     state: AppState = ctx.obj
-    with state.client() as c:
-        items, _ = c.list_feed(status=status, source=source, order=order, limit=limit)
+    token = _internal_token(state) if internal else None
+    with state.client(token=token) as c:
+        items, _ = c.list_feed(
+            status=status, source=source, order=order, limit=limit, internal=internal
+        )
     if state.json_out:
         _print_json([it.raw for it in items])
     elif not items:
         render.console.print("[grey62]No matching items.[/]")
     else:
         render.console.print(render.feed_table(items))
+        if not internal:
+            render.console.print(render.public_view_note())
+
+
+# ── replay ──────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def replay(
+    ctx: typer.Context,
+    cve: str = typer.Argument(..., help="The processed CVE id to replay."),
+    internal: bool = typer.Option(
+        False,
+        "--internal",
+        help="Attach the operator credential for the full trace (reasoning, verdict).",
+    ),
+) -> None:
+    """Replay what happened when a processed CVE ran: every attempt, what the
+    judge rejected each one for, and how it ended.
+
+    Without ``--internal`` this is the sanitized public trace; with it, the
+    operator's demo view — the agent's reasoning per attempt and the full
+    verdict."""
+    state: AppState = ctx.obj
+    cve = cve.upper()
+    token = _internal_token(state) if internal else None
+    with state.client(token=token) as c:
+        trace = c.get_replay(cve, internal=internal)
+    if state.json_out:
+        _print_json(trace.raw)
+    else:
+        render.console.print(render.replay_panel(trace, internal=internal))
 
 
 # ── stats ─────────────────────────────────────────────────────────────────

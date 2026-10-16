@@ -48,3 +48,55 @@ def cve_record(cve: str = "CVE-2024-4577"):
         "outcome": "exploit_generated",
         "processedAt": "2026-10-14T09:12:00+00:00",
     }
+
+
+def replay_trace(cve: str = "CVE-2024-4577", *, attempts=None, verdict=None):
+    """A representative GET /replay/{cve} payload — public projection by
+    default; pass raw-journal attempts (trigger_error/reasoning/tool_calls)
+    and a verdict for the internal view."""
+    return {
+        "cve": cve,
+        "package": "php",
+        "ecosystem": "php",
+        "vulnVersion": "8.1.0",
+        "fixedVersions": ["8.1.1"],
+        "harnessVersion": "3.0",
+        "finalStatus": "exploit_generated",
+        "ingestedAt": "2026-10-16T21:00:00+00:00",
+        "attempts": attempts
+        if attempts is not None
+        else [
+            {
+                "attempt": 1,
+                "ts": "2026-10-14T09:00:00Z",
+                "rejected": True,
+                "triggerError": (
+                    "judge rejected: [positive.no_marker] the exploit produced no marker "
+                    "on the vulnerable build"
+                ),
+            },
+            {"attempt": 2, "ts": "2026-10-14T09:12:00Z", "rejected": False},
+        ],
+        **({"verdict": verdict} if verdict is not None else {}),
+    }
+
+
+def journal_attempts():
+    """Raw-journal attempt entries (the internal view's spelling)."""
+    return [
+        {
+            "cve": "CVE-2024-4577",
+            "attempt": 1,
+            "ts": "2026-10-14T09:00:00Z",
+            "trigger_error": "judge rejected: [positive.no_marker] no marker",
+            "reasoning": ["first attempt reasoning", "second reasoning entry"],
+            "tool_calls": [{"tool": "read_file", "target": "Dockerfile", "ok": True}],
+        },
+        {
+            "cve": "CVE-2024-4577",
+            "attempt": 2,
+            "ts": "2026-10-14T09:12:00Z",
+            "reasoning": ["final attempt reasoning"],
+            "tool_calls": [],
+        },
+    ]

@@ -171,3 +171,77 @@ class CveRecord:
             processed_at=d.get("processedAt"),
             raw=d,
         )
+
+
+@dataclass
+class ReplayAttempt:
+    """One attempt of a replay trace — tolerant over the public/internal key
+    spellings (the public projection uses ``triggerError``/``toolCalls``-style
+    keys, the raw journal ``trigger_error``/``tool_calls``)."""
+
+    n: Optional[int] = None
+    ts: Optional[str] = None
+    rejected: Optional[bool] = None
+    trigger_error: Optional[str] = None
+    reasoning: list[str] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ReplayAttempt:
+        trigger_error = _first(d, "triggerError", "trigger_error")
+        # The public projection states `rejected` explicitly; a raw journal
+        # entry implies it — an attempt with a judge rejection was rejected.
+        rejected = _first(d, "rejected")
+        if rejected is None:
+            rejected = bool(trigger_error)
+        return cls(
+            n=_first(d, "attempt"),
+            ts=_first(d, "ts"),
+            rejected=rejected,
+            trigger_error=trigger_error,
+            reasoning=list(_first(d, "reasoning") or []),
+            tool_calls=list(_first(d, "toolCalls", "tool_calls") or []),
+            raw=d,
+        )
+
+    @property
+    def accepted(self) -> bool:
+        """An attempt without a rejection made progress (the judge said yes)."""
+        return not self.rejected
+
+
+@dataclass
+class ReplayTrace:
+    """The step/retry story of a processed CVE — ``GET /replay/{cve}``.
+
+    The public projection carries the story only (attempts + judge rejections +
+    final outcome); the internal view adds reasoning, tool calls, and the full
+    verdict document on ``.verdict``.
+    """
+
+    cve: str
+    package: Optional[str] = None
+    ecosystem: Optional[str] = None
+    vuln_version: Optional[str] = None
+    fixed_versions: list[str] = field(default_factory=list)
+    harness_version: Optional[str] = None
+    final_status: Optional[str] = None
+    attempts: list[ReplayAttempt] = field(default_factory=list)
+    verdict: Optional[dict[str, Any]] = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ReplayTrace:
+        return cls(
+            cve=(d.get("cve") or "").upper(),
+            package=_first(d, "package"),
+            ecosystem=_first(d, "ecosystem"),
+            vuln_version=_first(d, "vulnVersion", "vuln_version"),
+            fixed_versions=list(_first(d, "fixedVersions", "fixed_versions") or []),
+            harness_version=_first(d, "harnessVersion", "harness_version"),
+            final_status=_first(d, "finalStatus", "final_status"),
+            attempts=[ReplayAttempt.from_dict(a) for a in (d.get("attempts") or [])],
+            verdict=_first(d, "verdict"),
+            raw=d,
+        )

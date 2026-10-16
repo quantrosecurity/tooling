@@ -14,7 +14,7 @@ import httpx
 
 from . import config
 from .errors import ApiError, AuthError, NotFound, RateLimited, TurnstileRequired
-from .models import CveRecord, QueueItem, SubmitResult
+from .models import CveRecord, QueueItem, ReplayTrace, SubmitResult
 
 _USER_AGENT = "vrl-cli"
 
@@ -109,9 +109,7 @@ class VrlClient:
         if code == 404:
             raise NotFound(detail or "Not found.")
         if code == 429:
-            raise RateLimited(
-                "Rate limited by the API.", hint="Wait a bit and try again."
-            )
+            raise RateLimited("Rate limited by the API.", hint="Wait a bit and try again.")
         if code in (401, 403):
             raise AuthError(
                 detail or "Not authorized.",
@@ -128,10 +126,15 @@ class VrlClient:
         raise ApiError(code, detail or resp.reason_phrase)
 
     # ── public reads ──────────────────────────────────────────────────────────
+    # Every read takes ``internal=False``: the API's read plane projects records
+    # (paid-feed data, cost/tokens, verdicts hidden — see its public_view), and a
+    # caller presenting a valid internal credential gets the full record instead.
+    # Reads send ``Authorization`` only when ``internal=True``; a public read
+    # never touches credentials.
 
-    def get_item(self, cve: str) -> QueueItem:
+    def get_item(self, cve: str, *, internal: bool = False) -> QueueItem:
         """``GET /queue/{cve}`` — the one row for a CVE (404 → :class:`NotFound`)."""
-        resp = self._request("GET", f"/queue/{cve.upper()}")
+        resp = self._request("GET", f"/queue/{cve.upper()}", auth=internal)
         return QueueItem.from_dict(resp.json())
 
     def list_feed(
@@ -142,6 +145,7 @@ class VrlClient:
         order: str = "desc",
         limit: int = 25,
         cursor: Optional[str] = None,
+        internal: bool = False,
     ) -> tuple[list[QueueItem], Optional[str]]:
         """``GET /queue`` — one page of the live feed; returns (items, nextCursor)."""
         params: dict[str, Any] = {"limit": max(1, min(limit, 100)), "order": order}
@@ -151,7 +155,7 @@ class VrlClient:
             params["source"] = source
         if cursor:
             params["cursor"] = cursor
-        body = self._request("GET", "/queue", params=params).json()
+        body = self._request("GET", "/queue", params=params, auth=internal).json()
         items = [QueueItem.from_dict(x) for x in body.get("items", [])]
         return items, body.get("nextCursor")
 
@@ -165,16 +169,25 @@ class VrlClient:
         """``GET /queue/stats`` — true per-status depths."""
         return self._request("GET", "/queue/stats").json()
 
-    def find_record(self, cve: str) -> Optional[CveRecord]:
+    def find_record(self, cve: str, *, internal: bool = False) -> Optional[CveRecord]:
         """``GET /cves?q={cve}`` — the processed-ledger record, if present."""
         params = {"q": cve.upper(), "limit": 5}
-        body = self._request("GET", "/cves", params=params).json()
+        body = self._request("GET", "/cves", params=params, auth=internal).json()
         want = cve.upper()
         for item in body.get("items", []):
             rec = CveRecord.from_dict(item)
             if rec.cve == want:
                 return rec
         return None
+
+    def get_replay(self, cve: str, *, internal: bool = False) -> ReplayTrace:
+        """``GET /replay/{cve}`` — the step/retry story of a processed CVE.
+
+        The public projection carries attempts + judge rejections + the final
+        outcome; ``internal=True`` adds reasoning, tool calls, and the full
+        verdict (the operator's demo view)."""
+        resp = self._request("GET", f"/replay/{cve.upper()}", auth=internal)
+        return ReplayTrace.from_dict(resp.json())
 
     def harness_telemetry(self) -> dict[str, Any]:
         """``GET /harness/telemetry`` — program economics snapshot."""

@@ -22,6 +22,12 @@ DEFAULT_BASE_URL = "https://api.vrl.quantrosecurity.ai"
 # set it via VRL_INTERNAL_SA (or run on a GCP workload whose own identity is
 # allow-listed). Public reads and the public submit path need none of this.
 
+# The public submit form (a Turnstile-protected page on the website — the token
+# is solved in a browser on the site's domain, so `submit --browser` hands off to
+# it rather than trying to solve the challenge from a terminal). Override for a
+# staging website via VRL_SUBMIT_URL.
+DEFAULT_SUBMIT_URL = "https://vulnerabilityresearchlabs.ai/ai-xi/"
+
 # ── Environment variable names ───────────────────────────────────────────────
 
 ENV_BASE_URL = "VRL_API_BASE"
@@ -31,6 +37,7 @@ ENV_OIDC_AUDIENCE = "VRL_OIDC_AUDIENCE"
 ENV_TURNSTILE_TOKEN = "VRL_TURNSTILE_TOKEN"
 ENV_EMAIL = "VRL_SUBMITTER_EMAIL"
 ENV_NAME = "VRL_SUBMITTER_NAME"
+ENV_SUBMIT_URL = "VRL_SUBMIT_URL"
 
 # ── Validation (mirrors the server + website exactly) ────────────────────────
 
@@ -48,6 +55,13 @@ def base_url(override: str | None = None) -> str:
     """Resolve the API base URL: explicit override > env > default."""
     raw = override or os.getenv(ENV_BASE_URL) or DEFAULT_BASE_URL
     return raw.rstrip("/")
+
+
+def submit_url(override: str | None = None) -> str:
+    """Resolve the public submit-form URL: explicit override > env > default.
+
+    The trailing slash is kept as-is — it is a page URL, not an API base."""
+    return (override or os.getenv(ENV_SUBMIT_URL) or DEFAULT_SUBMIT_URL).strip()
 
 
 def parse_cve_tokens(raw: str) -> list[str]:
@@ -93,39 +107,65 @@ class StatusMeta:
 # Keyed by the exact status strings the API uses (backend/models.py::Status).
 STATUS: dict[str, StatusMeta] = {
     "pending": StatusMeta(
-        "Queued", "QUEUE", "yellow", False,
+        "Queued",
+        "QUEUE",
+        "yellow",
+        False,
         "Accepted and waiting in line for a solver to pick it up.",
     ),
     "processing": StatusMeta(
-        "Processing", "PROC", "cyan", False,
+        "Processing",
+        "PROC",
+        "cyan",
+        False,
         "A solver is working it: discovery → proof-of-concept → lab → verify.",
     ),
     "exploit_generated": StatusMeta(
-        "Exploit generated", "EXPL", "green", True,
+        "Exploit generated",
+        "EXPL",
+        "green",
+        True,
         "A working exploit was produced and verified against a live lab.",
     ),
     "no_exploit": StatusMeta(
-        "No exploit", "NONE", "blue", True,
+        "No exploit",
+        "NONE",
+        "blue",
+        True,
         "The lab built and ran, but no reproducible exploit was found — an honest negative.",
     ),
     "failed": StatusMeta(
-        "Failed", "FAIL", "red", True,
+        "Failed",
+        "FAIL",
+        "red",
+        True,
         "The run hit a build/infrastructure error before reaching a verdict.",
     ),
     "unsupported": StatusMeta(
-        "Unsupported", "UNSUP", "magenta", True,
+        "Unsupported",
+        "UNSUP",
+        "magenta",
+        True,
         "Out of scope for the Linux/container pipeline (e.g. Windows-only software).",
     ),
     "insufficient_metadata": StatusMeta(
-        "Insufficient metadata", "META", "magenta", True,
+        "Insufficient metadata",
+        "META",
+        "magenta",
+        True,
         "Skipped for now — no derivable version data to pin a target. Recoverable later.",
     ),
 }
 
 # A sensible display order (lifecycle, then terminal states).
 STATUS_ORDER = [
-    "pending", "processing", "exploit_generated", "no_exploit",
-    "failed", "unsupported", "insufficient_metadata",
+    "pending",
+    "processing",
+    "exploit_generated",
+    "no_exploit",
+    "failed",
+    "unsupported",
+    "insufficient_metadata",
 ]
 
 # The states that mean "done" — polling stops when one is reached.

@@ -16,7 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import config
-from .models import CveRecord, QueueItem, SubmitResult
+from .models import CveRecord, QueueItem, ReplayTrace, SubmitResult
 
 console = Console()
 err_console = Console(stderr=True)
@@ -170,8 +170,10 @@ def _metrics_table(item: QueueItem, record: Optional[CveRecord]) -> Table:
     difficulty = item.difficulty or (record.difficulty_level if record else None)
     cost = item.cost_usd if item.cost_usd is not None else (record.cost_usd if record else None)
     tokens = item.tokens if item.tokens is not None else (record.tokens if record else None)
-    secs = item.seconds if item.seconds is not None else (
-        record.time_to_generate_sec if record else None
+    secs = (
+        item.seconds
+        if item.seconds is not None
+        else (record.time_to_generate_sec if record else None)
     )
 
     row("Status", status_badge(item.status))
@@ -298,7 +300,7 @@ def stats_view(stats: dict[str, Any], telemetry: Optional[dict[str, Any]] = None
 
     blocks: list[RenderableType] = [t]
     if telemetry:
-        tiles = (telemetry.get("tiles") or {})
+        tiles = telemetry.get("tiles") or {}
         window = tiles.get("all") or next(iter(tiles.values()), None)
         if window:
             econ = Table.grid(padding=(0, 2))
@@ -315,3 +317,88 @@ def stats_view(stats: dict[str, Any], telemetry: Optional[dict[str, Any]] = None
                 Panel(econ, title="Program economics", title_align="left", border_style="cyan")
             )
     return Group(*blocks)
+
+
+# ── replay + view tier ──────────────────────────────────────────────────────
+
+
+def _wrap(text: str, width: int, indent: str = "  ") -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(
+        text, width=max(20, width), initial_indent=indent, subsequent_indent=indent
+    )
+
+
+def public_view_note() -> Text:
+    """The footer that names the view tier honestly.
+
+    The API's read plane projects records for anonymous callers (paid-feed
+    data, cost/tokens, AI-XI, verdicts hidden — see its public_view), so a read
+    without credentials is the public view by construction. Say so, and say
+    how to upgrade it.
+    """
+    return Text(
+        "public view — cost / verdict / AI-XI / paid-feed fields are internal. "
+        "Pass --internal (or set VRL_TOKEN) for the full record.",
+        style="italic grey58",
+    )
+
+
+def replay_panel(trace: ReplayTrace, *, internal: bool = False) -> Panel:
+    """The step/retry story of one processed CVE: what happened, attempt by attempt.
+
+    Public: every attempt, what the judge rejected each one for, and how it
+    ended. Internal adds the operator's demo view — the last reasoning entry
+    and the tool-call count per attempt, plus the full verdict document.
+    """
+    header = Text(trace.cve, style="bold white")
+    if trace.package:
+        header.append(f"  {trace.package}", style="white")
+    if trace.ecosystem:
+        header.append(f" ({trace.ecosystem})", style="grey62")
+
+    meta = Table.grid(padding=(0, 2))
+    meta.add_column(style="bold grey70", justify="right")
+    meta.add_column()
+    meta.add_row("Final", status_badge(trace.final_status))
+    if trace.vuln_version:
+        meta.add_row("Vulnerable", trace.vuln_version)
+    if trace.fixed_versions:
+        meta.add_row("Fixed", ", ".join(trace.fixed_versions))
+    if trace.harness_version:
+        meta.add_row("Harness", f"v{trace.harness_version}")
+    meta.add_row("Attempts", str(len(trace.attempts)))
+
+    width = max(60, console.width - 8)
+    blocks: list[RenderableType] = [meta, Text("")]
+    for a in trace.attempts:
+        n = a.n if a.n is not None else "?"
+        ts = f"  ·  {fmt_relative(a.ts)}" if a.ts else ""
+        if a.rejected:
+            blocks.append(Text(f"✗ attempt {n}{ts}", style="bold red"))
+            for line in _wrap(a.trigger_error or "rejected by the judge", width):
+                blocks.append(Text(line, style="grey82"))
+        else:
+            blocks.append(Text(f"✓ attempt {n}{ts}", style="bold green"))
+            blocks.append(Text("  accepted — the judge verified the exploit", style="grey62"))
+        if internal and a.reasoning:
+            blocks.append(Text(f"  reasoning ({len(a.reasoning)} entries):", style="bold grey70"))
+            for line in _wrap(a.reasoning[-1], width, indent="    "):
+                blocks.append(Text(line, style="grey58"))
+        if internal and a.tool_calls:
+            blocks.append(Text(f"  tool calls: {len(a.tool_calls)}", style="bold grey70"))
+        blocks.append(Text(""))
+    if trace.attempts and trace.attempts[-1].rejected:
+        blocks.append(
+            Text(
+                "the trace ends on a rejected attempt — the final state above is the run's",
+                style="italic grey58",
+            )
+        )
+    if not internal:
+        blocks.append(public_view_note())
+
+    return Panel(
+        Group(*blocks), title=header, title_align="left", border_style="cyan", padding=(1, 2)
+    )
