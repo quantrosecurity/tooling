@@ -402,3 +402,26 @@ def replay_panel(trace: ReplayTrace, *, internal: bool = False) -> Panel:
     return Panel(
         Group(*blocks), title=header, title_align="left", border_style="cyan", padding=(1, 2)
     )
+
+
+def replay_index_table(rows: list[dict[str, Any]]) -> Table:
+    """Which CVEs have replay traces (coverage), one row each."""
+    t = Table(
+        title="Replay coverage", title_style="bold", header_style="bold grey70", pad_edge=False
+    )
+    t.add_column("CVE", style="bold", no_wrap=True, min_width=14)
+    t.add_column("Final", no_wrap=True)
+    t.add_column("Attempts", justify="right", no_wrap=True)
+    t.add_column("Package", overflow="ellipsis", no_wrap=True)
+    t.add_column("Ingested", no_wrap=True)
+    for r in rows:
+        final = r.get("finalStatus")
+        meta = config.status_meta(final)
+        t.add_row(
+            r.get("cve", "?"),
+            Text(meta.code, style=f"bold {meta.color}"),
+            str(r.get("attempts", 0)),
+            r.get("package") or "—",
+            fmt_relative(r.get("ingestedAt")),
+        )
+    return t
