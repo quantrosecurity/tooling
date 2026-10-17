@@ -119,8 +119,10 @@ class VrlClient:
             raise TurnstileRequired(
                 detail,
                 hint=(
-                    "Public submit needs a browser-solved Cloudflare Turnstile token. "
-                    "Pass --turnstile-token, or submit via the website / the --internal path."
+                    "Public submit needs a browser-solved Cloudflare Turnstile token — "
+                    "it cannot be solved from a terminal. Run the same command with "
+                    "--browser (opens the website's form with the CVE in your "
+                    "clipboard), or pass --turnstile-token, or use --internal."
                 ),
             )
         raise ApiError(code, detail or resp.reason_phrase)

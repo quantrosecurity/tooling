@@ -201,7 +201,11 @@ def submit(
         if not email:
             raise VrlError(
                 "Public submit needs an email so the result can be sent to you.",
-                hint="Pass --email you@example.com (and --name), or use --internal.",
+                hint=(
+                    "Pass --email you@example.com (and --name), or use --internal "
+                    "(your Google identity, no email, no Turnstile), or --browser "
+                    "(the website's form)."
+                ),
             )
         with state.client() as c:
             result = c.submit_public(
