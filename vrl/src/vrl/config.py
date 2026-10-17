@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import Optional
 
 # ── Service endpoints ────────────────────────────────────────────────────────
 
@@ -17,10 +18,16 @@ from dataclasses import dataclass
 # self-hosted or staging deployment via --base-url / VRL_API_BASE.
 DEFAULT_BASE_URL = "https://api.vrl.quantrosecurity.ai"
 
-# The privileged /internal plane mints a Google OIDC identity token. The service
-# account to impersonate is deployment-specific, so it is NOT hardcoded here —
-# set it via VRL_INTERNAL_SA (or run on a GCP workload whose own identity is
-# allow-listed). Public reads and the public submit path need none of this.
+# The privileged /internal plane mints a Google OIDC identity token by
+# impersonating an allow-listed service account. There is exactly one
+# deployment of the internal plane today, so its caller SA is the DEFAULT —
+# `--internal` then works out of the box for the operator (the alternative —
+# requiring an env var before your own tool works — was tried and nobody
+# exported it). Impersonation is still gated by IAM
+# (roles/iam.serviceAccountTokenCreator on this SA), and another deployment
+# overrides it via VRL_INTERNAL_SA (or clears it with VRL_INTERNAL_SA= to use
+# the ambient identity, e.g. on a GCP workload whose own SA is allow-listed).
+DEFAULT_INTERNAL_SA = "vrl-api-internal@quantro-production-1.iam.gserviceaccount.com"
 
 # The public submit form (a Turnstile-protected page on the website — the token
 # is solved in a browser on the site's domain, so `submit --browser` hands off to
@@ -62,6 +69,17 @@ def submit_url(override: str | None = None) -> str:
 
     The trailing slash is kept as-is — it is a page URL, not an API base."""
     return (override or os.getenv(ENV_SUBMIT_URL) or DEFAULT_SUBMIT_URL).strip()
+
+
+def internal_sa(override: str | None = None) -> Optional[str]:
+    """The SA ``--internal`` impersonates: override > VRL_INTERNAL_SA > default.
+
+    ``VRL_INTERNAL_SA=`` (empty) selects the ambient identity instead — the
+    right choice on a GCP workload whose own SA is allow-listed."""
+    raw = override if override is not None else os.getenv(ENV_INTERNAL_SA)
+    if raw is None:
+        return DEFAULT_INTERNAL_SA
+    return raw.strip() or None
 
 
 def parse_cve_tokens(raw: str) -> list[str]:

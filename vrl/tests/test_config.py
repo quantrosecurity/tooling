@@ -60,3 +60,21 @@ def test_status_meta_fallback():
     meta = config.status_meta("some_new_state")
     assert meta.label == "some_new_state"
     assert meta.terminal is False
+
+
+# ── the internal SA default (the operator's --internal must just work) ───────
+
+
+def test_internal_sa_defaults_to_this_deployment(monkeypatch):
+    monkeypatch.delenv("VRL_INTERNAL_SA", raising=False)
+    assert config.internal_sa() == config.DEFAULT_INTERNAL_SA
+
+
+def test_internal_sa_env_overrides_the_default(monkeypatch):
+    monkeypatch.setenv("VRL_INTERNAL_SA", "other@project.iam.gserviceaccount.com")
+    assert config.internal_sa() == "other@project.iam.gserviceaccount.com"
+
+
+def test_internal_sa_empty_env_selects_ambient_identity(monkeypatch):
+    monkeypatch.setenv("VRL_INTERNAL_SA", "")
+    assert config.internal_sa() is None

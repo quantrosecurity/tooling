@@ -227,3 +227,28 @@ def test_replay_404_names_the_traces_on_file():
     assert isinstance(result.exception, VrlError)
     assert "No replay trace for CVE-2024-27198" in result.exception.message
     assert "CVE-2026-104457" in result.exception.message  # coverage named, not guessed
+
+
+@respx.mock
+def test_internal_read_mints_with_the_default_sa(monkeypatch):
+    import vrl.auth as auth_mod
+    from vrl import config
+
+    minted = {}
+
+    def fake_mint(*, audience: str, impersonate_sa):
+        minted["aud"] = audience
+        minted["sa"] = impersonate_sa
+        return "minted-token"
+
+    monkeypatch.setattr(auth_mod, "mint_oidc_token", fake_mint)
+    monkeypatch.delenv("VRL_TOKEN", raising=False)
+    monkeypatch.delenv("VRL_INTERNAL_SA", raising=False)
+    route = respx.get(f"{BASE}/queue/CVE-2024-4577").mock(
+        return_value=httpx.Response(200, json=queue_item(status="pending"))
+    )
+    result = runner.invoke(app, ["--base-url", BASE, "show", "CVE-2024-4577", "--internal"])
+    assert result.exit_code == 0, result.output
+    assert minted["sa"] == config.DEFAULT_INTERNAL_SA  # no env var needed
+    assert minted["aud"] == BASE
+    assert route.calls.last.request.headers["authorization"] == "Bearer minted-token"

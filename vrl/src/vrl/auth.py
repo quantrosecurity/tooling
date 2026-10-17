@@ -57,7 +57,10 @@ def resolve_token(
         )
 
     aud = audience or os.getenv(config.ENV_OIDC_AUDIENCE) or base_url
-    sa = impersonate_sa or os.getenv(config.ENV_INTERNAL_SA)  # None → use ambient identity
+    # impersonate_sa wins when a caller passes one explicitly; otherwise this
+    # deployment's default SA (see config.internal_sa) — the operator's
+    # `--internal` works out of the box, no env var required.
+    sa = impersonate_sa or config.internal_sa()
     return mint_oidc_token(audience=aud, impersonate_sa=sa)
 
 
@@ -73,7 +76,7 @@ def mint_oidc_token(*, audience: str, impersonate_sa: Optional[str]) -> str:
     token = _mint_with_gcloud(audience, impersonate_sa)
     if token:
         return token
-    target = impersonate_sa or "the allow-listed service account (set VRL_INTERNAL_SA)"
+    target = impersonate_sa or config.DEFAULT_INTERNAL_SA
     raise AuthError(
         "Could not mint a Google OIDC token.",
         hint=(
