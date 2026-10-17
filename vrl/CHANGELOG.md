@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows
 - `vrl replay <CVE>` — what happened when a processed CVE ran: every attempt,
   what the judge rejected each one for, and how it ended. `--internal` adds the
   operator's demo view (the agent's reasoning and the full verdict).
+  `--list` shows coverage — replay covers corpus-harness runs only, and a CVE
+  with a queue row but no trace gets an error that says exactly that (with the
+  traces on file), not a bare "Not found".
 - `vrl list` (alias `feed`) — browse the live queue with status/source/order
   filters; `--internal` for full records.
 - `vrl stats` — per-status queue depth plus program-level economics.

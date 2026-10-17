@@ -173,3 +173,57 @@ def test_submit_browser_opens_the_form(monkeypatch):
     assert opened["url"] == "https://vulnerabilityresearchlabs.ai/ai-xi/"
     assert "vrl watch CVE-2024-4577" in result.output
     assert "Turnstile" in result.output
+
+
+@respx.mock
+def test_replay_list_renders_coverage():
+    respx.get(f"{BASE}/replay").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "cve": "CVE-2026-104457",
+                        "finalStatus": "exploit_generated",
+                        "attempts": 17,
+                        "package": "yeswiki",
+                    },
+                    {
+                        "cve": "CVE-2026-87115",
+                        "finalStatus": "exploit_generated",
+                        "attempts": 10,
+                        "package": None,
+                    },
+                ],
+                "total": 2,
+            },
+        )
+    )
+    result = runner.invoke(app, ["--base-url", BASE, "replay", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "CVE-2026-104457" in result.output
+    assert "17" in result.output
+    assert "Replay coverage" in result.output
+
+
+def test_replay_requires_a_cve_offline():
+    result = runner.invoke(app, ["replay"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, VrlError)
+
+
+@respx.mock
+def test_replay_404_names_the_traces_on_file():
+    respx.get(f"{BASE}/replay/CVE-2024-27198").mock(
+        return_value=httpx.Response(404, json={"detail": "No replay trace for this CVE..."})
+    )
+    respx.get(f"{BASE}/replay").mock(
+        return_value=httpx.Response(
+            200, json={"items": [{"cve": "CVE-2026-104457", "attempts": 17}], "total": 1}
+        )
+    )
+    result = runner.invoke(app, ["--base-url", BASE, "replay", "CVE-2024-27198"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, VrlError)
+    assert "No replay trace for CVE-2024-27198" in result.exception.message
+    assert "CVE-2026-104457" in result.exception.message  # coverage named, not guessed

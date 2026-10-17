@@ -29,7 +29,7 @@ from rich.console import Console
 
 from . import __version__, auth, config, render
 from .client import VrlClient
-from .errors import InvalidCve, InvalidEmail, TurnstileRequired, VrlError
+from .errors import InvalidCve, InvalidEmail, NotFound, TurnstileRequired, VrlError
 
 app = typer.Typer(
     name="vrl",
@@ -337,11 +337,14 @@ def list_cmd(
 @app.command()
 def replay(
     ctx: typer.Context,
-    cve: str = typer.Argument(..., help="The processed CVE id to replay."),
+    cve: Optional[str] = typer.Argument(None, help="The processed CVE id (omit with --list)."),
     internal: bool = typer.Option(
         False,
         "--internal",
         help="Attach the operator credential for the full trace (reasoning, verdict).",
+    ),
+    list_all: bool = typer.Option(
+        False, "--list", help="List which CVEs have replay traces, then exit."
     ),
 ) -> None:
     """Replay what happened when a processed CVE ran: every attempt, what the
@@ -349,12 +352,38 @@ def replay(
 
     Without ``--internal`` this is the sanitized public trace; with it, the
     operator's demo view — the agent's reasoning per attempt and the full
-    verdict."""
+    verdict. ``--list`` shows coverage: replay covers corpus-harness runs only."""
     state: AppState = ctx.obj
+    if list_all:
+        with state.client() as c:
+            rows = c.list_replays()
+        if state.json_out:
+            _print_json(rows)
+        elif not rows:
+            render.console.print("[grey62]No replay traces yet.[/]")
+        else:
+            render.console.print(render.replay_index_table(rows))
+        raise typer.Exit()
+
+    if not cve:
+        raise VrlError(
+            "Provide a CVE id, e.g. vrl replay CVE-2026-104457, or --list to see "
+            "which CVEs have traces.",
+        )
     cve = cve.upper()
     token = _internal_token(state) if internal else None
     with state.client(token=token) as c:
-        trace = c.get_replay(cve, internal=internal)
+        try:
+            trace = c.get_replay(cve, internal=internal)
+        except NotFound:
+            with state.client() as c2:
+                covered = ", ".join(r["cve"] for r in c2.list_replays())
+            raise VrlError(
+                f"No replay trace for {cve}. Replay covers corpus-harness runs only — "
+                "the queue row exists, but there is no step/retry story for it. "
+                f"Traces on file: {covered}",
+                hint=f"vrl show {cve} works for any queued CVE; vrl replay --list shows coverage.",
+            ) from None
     if state.json_out:
         _print_json(trace.raw)
     else:

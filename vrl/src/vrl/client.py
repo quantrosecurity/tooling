@@ -189,6 +189,15 @@ class VrlClient:
         resp = self._request("GET", f"/replay/{cve.upper()}", auth=internal)
         return ReplayTrace.from_dict(resp.json())
 
+    def list_replays(self) -> list[dict[str, Any]]:
+        """``GET /replay`` — which CVEs have traces (public-safe index rows).
+
+        The index is the same for every caller: cve, package, finalStatus,
+        attempt count. Replay coverage is exactly the corpus-harness runs —
+        a queue row without a trace here has no step/retry story."""
+        body = self._request("GET", "/replay").json()
+        return list(body.get("items", []))
+
     def harness_telemetry(self) -> dict[str, Any]:
         """``GET /harness/telemetry`` — program economics snapshot."""
         return self._request("GET", "/harness/telemetry").json()
